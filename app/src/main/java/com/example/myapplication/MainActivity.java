@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -32,6 +33,7 @@ import com.mapbox.android.core.location.LocationEngineResult;
 import com.mapbox.android.gestures.MoveGestureDetector;
 import com.mapbox.api.directions.v5.DirectionsCriteria;
 import com.mapbox.api.directions.v5.models.Bearing;
+import com.mapbox.api.directions.v5.models.DirectionsRoute;
 import com.mapbox.api.directions.v5.models.RouteOptions;
 import com.mapbox.api.directions.v5.models.VoiceInstructions;
 import com.mapbox.bindgen.Expected;
@@ -101,6 +103,19 @@ public class MainActivity extends AppCompatActivity {
     private MapboxRouteLineApi routeLineApi;
     private DatabaseReference databaseReference;
     private Double latA, longB;
+    private TextView distanceTimeTextView;
+    private static final double K = 1.0; // Hệ số tỉ lệ
+
+    // Tính khoảng cách giữa hai điểm
+    public static double calculateLi(double x1, double y1, double x2, double y2) {
+        return K * Math.sqrt(Math.pow((x2 - x1), 2) + Math.pow((y2 - y1), 2));
+    }
+
+    // Tính khoảng cách từ một điểm đến một đường thẳng
+    public static double calculateDi(double x0, double y0, double a, double b, double c) {
+        return K * (Math.abs(a * x0 + b * y0 + c) / Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2)));
+    }
+
     private final LocationObserver locationObserver = new LocationObserver() {
         @Override
         public void onNewRawLocation(@NonNull Location location) {
@@ -233,6 +248,7 @@ public class MainActivity extends AppCompatActivity {
         mapboxNavigation.registerLocationObserver(locationObserver);
         mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver);
         databaseReference = FirebaseDatabase.getInstance().getReference().child("Data");
+        distanceTimeTextView = findViewById(R.id.distanceTimeTextView);
 
         // Đọc dữ liệu từ Realtime Database và gán vào biến A và B
         readLocationFromFirebase();
@@ -320,7 +336,7 @@ public class MainActivity extends AppCompatActivity {
 
     @SuppressLint("MissingPermission")
     private void fetchRoute() {
-        // Tọa độ của Computer History Museum
+        // Tọa độ của điểm đích từ Firebase
         Point destination = Point.fromLngLat(longB, latA);
 
         LocationEngine locationEngine = LocationEngineProvider.getBestLocationEngine(MainActivity.this);
@@ -334,10 +350,15 @@ public class MainActivity extends AppCompatActivity {
                 Point origin = Point.fromLngLat(Objects.requireNonNull(location).getLongitude(), location.getLatitude());
 
                 // Tính khoảng cách giữa origin và destination
-                double distance = TurfMeasurement.distance(origin, destination);
+                double distance = calculateLi(
+                        origin.latitude(),
+                        origin.longitude(),
+                        destination.latitude(),
+                        destination.longitude()
+                );
 
                 // Kiểm tra nếu khoảng cách vượt quá giới hạn (ví dụ: 5000 km)
-                double maxDistance = 5000.0; // Bạn có thể điều chỉnh giới hạn này nếu cần
+                double maxDistance = 500.0; // Bạn có thể điều chỉnh giới hạn này nếu cần
                 if (distance > maxDistance) {
                     Toast.makeText(MainActivity.this, "Destination is too far. Please choose a closer point.", Toast.LENGTH_SHORT).show();
                     setRoute.setEnabled(true);
@@ -346,7 +367,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 builder.coordinatesList(Arrays.asList(origin, destination));
-                builder.alternatives(false);
+                builder.alternatives(true);
                 builder.profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC);
                 builder.bearingsList(Arrays.asList(Bearing.builder().angle(location.getBearing()).degrees(45.0).build(), null));
                 applyDefaultNavigationOptions(builder);
@@ -355,6 +376,18 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void onRoutesReady(@NonNull List<NavigationRoute> list, @NonNull RouterOrigin routerOrigin) {
                         mapboxNavigation.setNavigationRoutes(list);
+
+                        // Lấy đối tượng DirectionsRoute từ NavigationRoute
+                        DirectionsRoute route = list.get(0).getDirectionsRoute();
+
+                        // Lấy khoảng cách và thời gian từ DirectionsRoute
+                        double distanceInKm = route.distance() / 1000.0;
+                        double durationInMinutes = route.duration() / 60.0;
+
+                        // Cập nhật TextView với khoảng cách và thời gian
+                        String distanceTimeText = String.format(Locale.US, "Distance: %.2f km, Time: %.2f min", distanceInKm, durationInMinutes);
+                        distanceTimeTextView.setText(distanceTimeText);
+
                         focusLocationBtn.performClick();
                         setRoute.setEnabled(true);
                         setRoute.setText("Set route");
@@ -378,9 +411,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-
-
-
     @Override
     protected void onDestroy() {
         super.onDestroy();

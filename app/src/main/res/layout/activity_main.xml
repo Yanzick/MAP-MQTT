@@ -19,6 +19,16 @@
         android:layout_marginEnd="10sp"
         android:id="@+id/soundButton"/>
 
+    <TextView
+        android:id="@+id/distanceTimeTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/setRoute"
+        android:layout_margin="16dp"
+        android:text="Distance and Time"
+        android:textSize="18sp"
+        android:textColor="@android:color/black" />
+
     <com.google.android.material.button.MaterialButton
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -37,5 +47,4 @@
         android:layout_alignParentEnd="true"
         android:layout_above="@id/setRoute"
         android:layout_margin="16sp"/>
-
 </RelativeLayout>
