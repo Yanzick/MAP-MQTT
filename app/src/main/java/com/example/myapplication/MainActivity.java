@@ -5,7 +5,6 @@ import static com.mapbox.maps.plugin.gestures.GesturesUtils.addOnMapClickListene
 import static com.mapbox.maps.plugin.gestures.GesturesUtils.getGestures;
 import static com.mapbox.maps.plugin.locationcomponent.LocationComponentUtils.getLocationComponent;
 import static com.mapbox.navigation.base.extensions.RouteOptionsExtensions.applyDefaultNavigationOptions;
-
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
@@ -14,18 +13,18 @@ import android.graphics.BitmapFactory;
 import android.location.Location;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
-
 import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.firebase.database.ValueEventListener;
 import com.mapbox.android.core.location.LocationEngine;
 import com.mapbox.android.core.location.LocationEngineCallback;
 import com.mapbox.android.core.location.LocationEngineProvider;
@@ -81,22 +80,27 @@ import com.mapbox.navigation.ui.voice.model.SpeechValue;
 import com.mapbox.navigation.ui.voice.model.SpeechVolume;
 import com.mapbox.navigation.ui.voice.view.MapboxSoundButton;
 import com.mapbox.turf.TurfMeasurement;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-
 import kotlin.Unit;
 import kotlin.jvm.functions.Function1;
 
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
 public class MainActivity extends AppCompatActivity {
-    MapView mapView;
-    MaterialButton setRoute;
-    FloatingActionButton focusLocationBtn;
+    private MapView mapView;
+    private MaterialButton setRoute;
+    private FloatingActionButton focusLocationBtn;
     private final NavigationLocationProvider navigationLocationProvider = new NavigationLocationProvider();
     private MapboxRouteLineView routeLineView;
     private MapboxRouteLineApi routeLineApi;
+    private DatabaseReference databaseReference;
+    private Double latA, longB;
     private final LocationObserver locationObserver = new LocationObserver() {
         @Override
         public void onNewRawLocation(@NonNull Location location) {
@@ -228,7 +232,10 @@ public class MainActivity extends AppCompatActivity {
         mapboxNavigation.registerRoutesObserver(routesObserver);
         mapboxNavigation.registerLocationObserver(locationObserver);
         mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver);
+        databaseReference = FirebaseDatabase.getInstance().getReference().child("Data");
 
+        // Đọc dữ liệu từ Realtime Database và gán vào biến A và B
+        readLocationFromFirebase();
         MapboxSoundButton soundButton = findViewById(R.id.soundButton);
         soundButton.unmute();
         soundButton.setOnClickListener(new View.OnClickListener() {
@@ -314,7 +321,7 @@ public class MainActivity extends AppCompatActivity {
     @SuppressLint("MissingPermission")
     private void fetchRoute() {
         // Tọa độ của Computer History Museum
-        Point destination = Point.fromLngLat(-122.0774, 37.4143);
+        Point destination = Point.fromLngLat(longB, latA);
 
         LocationEngine locationEngine = LocationEngineProvider.getBestLocationEngine(MainActivity.this);
         locationEngine.getLastLocation(new LocationEngineCallback<LocationEngineResult>() {
@@ -340,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
 
                 builder.coordinatesList(Arrays.asList(origin, destination));
                 builder.alternatives(false);
-                builder.profile(DirectionsCriteria.PROFILE_DRIVING);
+                builder.profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC);
                 builder.bearingsList(Arrays.asList(Bearing.builder().angle(location.getBearing()).degrees(45.0).build(), null));
                 applyDefaultNavigationOptions(builder);
 
@@ -381,4 +388,38 @@ public class MainActivity extends AppCompatActivity {
         mapboxNavigation.unregisterRoutesObserver(routesObserver);
         mapboxNavigation.unregisterLocationObserver(locationObserver);
     }
+    private void readLocationFromFirebase() {
+        databaseReference.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                if (dataSnapshot.exists()) {
+                    // Lấy dữ liệu từ snapshot
+                    latA = dataSnapshot.child("Lat").getValue(Double.class);
+                    longB = dataSnapshot.child("Long").getValue(Double.class);
+
+                    // Kiểm tra và sử dụng tọa độ nếu cần
+                    if (latA != null && longB != null) {
+                        // Log tọa độ ra Logcat để kiểm tra
+                        Log.d("Location", "Lat: " + latA + ", Long: " + longB);
+
+                        // Cập nhật bản đồ đến vị trí mới
+                        updateCamera(Point.fromLngLat(longB, latA), null);
+
+                        // Cập nhật đường đi mới
+                        fetchRoute();
+                    }
+                } else {
+                    // Xử lý khi dữ liệu không tồn tại
+                    Toast.makeText(MainActivity.this, "No data available", Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+                // Xử lý khi có lỗi xảy ra trong quá trình đọc dữ liệu
+                Toast.makeText(MainActivity.this, "Failed to read value: " + databaseError.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
 }
