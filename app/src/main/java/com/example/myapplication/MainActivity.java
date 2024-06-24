@@ -103,7 +103,8 @@ public class MainActivity extends AppCompatActivity {
     private MapboxRouteLineApi routeLineApi;
     private DatabaseReference databaseReference;
     private Double latA, longB;
-    private TextView distanceTimeTextView;
+    private TextView distanceTextView;
+    private TextView timeTextView;
     private static final double K = 1.0; // Hệ số tỉ lệ
 
     // Tính khoảng cách giữa hai điểm
@@ -248,7 +249,8 @@ public class MainActivity extends AppCompatActivity {
         mapboxNavigation.registerLocationObserver(locationObserver);
         mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver);
         databaseReference = FirebaseDatabase.getInstance().getReference().child("Data");
-        distanceTimeTextView = findViewById(R.id.distanceTimeTextView);
+        distanceTextView = findViewById(R.id.distanceTextView);
+        timeTextView = findViewById(R.id.timeTextView);
 
         // Đọc dữ liệu từ Realtime Database và gán vào biến A và B
         readLocationFromFirebase();
@@ -345,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
             public void onSuccess(LocationEngineResult result) {
                 Location location = result.getLastLocation();
                 setRoute.setEnabled(false);
-                setRoute.setText("Fetching route...");
+                setRoute.setText("Đang tìm tuyến xe gần nhất...");
                 RouteOptions.Builder builder = RouteOptions.builder();
                 Point origin = Point.fromLngLat(Objects.requireNonNull(location).getLongitude(), location.getLatitude());
 
@@ -358,11 +360,11 @@ public class MainActivity extends AppCompatActivity {
                 );
 
                 // Kiểm tra nếu khoảng cách vượt quá giới hạn (ví dụ: 5000 km)
-                double maxDistance = 500.0; // Bạn có thể điều chỉnh giới hạn này nếu cần
+                double maxDistance = 10.0; // Bạn có thể điều chỉnh giới hạn này nếu cần
                 if (distance > maxDistance) {
-                    Toast.makeText(MainActivity.this, "Destination is too far. Please choose a closer point.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "Không có tuyến xe buýt nào ở gần bạn", Toast.LENGTH_SHORT).show();
                     setRoute.setEnabled(true);
-                    setRoute.setText("Set route");
+                    setRoute.setText("Tìm tuyến xe gần nhất");
                     return;
                 }
 
@@ -385,19 +387,19 @@ public class MainActivity extends AppCompatActivity {
                         double durationInMinutes = route.duration() / 60.0;
 
                         // Cập nhật TextView với khoảng cách và thời gian
-                        String distanceTimeText = String.format(Locale.US, "Distance: %.2f km, Time: %.2f min", distanceInKm, durationInMinutes);
-                        distanceTimeTextView.setText(distanceTimeText);
+                        distanceTextView.setText(String.format(Locale.US, "Khoản cách: %.2f km", distanceInKm));
+                        timeTextView.setText(String.format(Locale.US, "Thời gian: %.2f min", durationInMinutes));
 
                         focusLocationBtn.performClick();
                         setRoute.setEnabled(true);
-                        setRoute.setText("Set route");
+                        setRoute.setText("Tìm tuyến xe gần nhất");
                     }
 
                     @Override
                     public void onFailure(@NonNull List<RouterFailure> list, @NonNull RouteOptions routeOptions) {
                         setRoute.setEnabled(true);
-                        setRoute.setText("Set route");
-                        Toast.makeText(MainActivity.this, "Route request failed", Toast.LENGTH_SHORT).show();
+                        setRoute.setText("Tìm tuyến xe gần nhất");
+                        Toast.makeText(MainActivity.this, "Tìm tuyến xe thất bại", Toast.LENGTH_SHORT).show();
                     }
 
                     @Override
@@ -424,32 +426,49 @@ public class MainActivity extends AppCompatActivity {
             public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
                 if (dataSnapshot.exists()) {
                     // Lấy dữ liệu từ snapshot
-                    latA = dataSnapshot.child("Lat").getValue(Double.class);
-                    longB = dataSnapshot.child("Long").getValue(Double.class);
+                    String latString = dataSnapshot.child("Lat").getValue(String.class);
+                    String longString = dataSnapshot.child("Long").getValue(String.class);
 
-                    // Kiểm tra và sử dụng tọa độ nếu cần
-                    if (latA != null && longB != null) {
-                        // Log tọa độ ra Logcat để kiểm tra
-                        Log.d("Location", "Lat: " + latA + ", Long: " + longB);
+                    // Kiểm tra và chuyển đổi thành số nếu dữ liệu tồn tại
+                    if (latString != null && longString != null) {
+                        try {
+                            double lat = Double.parseDouble(latString);
+                            double lon = Double.parseDouble(longString);
 
-                        // Cập nhật bản đồ đến vị trí mới
-                        updateCamera(Point.fromLngLat(longB, latA), null);
+                            // Log tọa độ ra Logcat để kiểm tra
+                            Log.d("Location", "Lat: " + lat + ", Long: " + lon);
 
-                        // Cập nhật đường đi mới
-                        fetchRoute();
+                            // Cập nhật biến latA và longB với giá trị mới
+                            latA = lat;
+                            longB = lon;
+
+                            // Cập nhật bản đồ đến vị trí mới
+
+
+                            // Cập nhật đường đi mới
+                            fetchRoute();
+                        } catch (NumberFormatException e) {
+                            Log.e("Location", "Lỗi chuyển đổi latitude hoặc longitude: " + e.getMessage());
+                        }
+                    } else {
+                        // Xử lý khi dữ liệu không tồn tại
+                        Toast.makeText(MainActivity.this, "Không có dữ liệu", Toast.LENGTH_SHORT).show();
                     }
-                } else {
-                    // Xử lý khi dữ liệu không tồn tại
-                    Toast.makeText(MainActivity.this, "No data available", Toast.LENGTH_SHORT).show();
+                }
+                else {
+                    // Xử lý khi dataSnapshot không tồn tại
+                    Toast.makeText(MainActivity.this, "Không có dữ liệu", Toast.LENGTH_SHORT).show();
                 }
             }
 
             @Override
             public void onCancelled(@NonNull DatabaseError databaseError) {
                 // Xử lý khi có lỗi xảy ra trong quá trình đọc dữ liệu
-                Toast.makeText(MainActivity.this, "Failed to read value: " + databaseError.getMessage(), Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "Lỗi khi đọc dữ liệu từ Firebase: " + databaseError.getMessage(), Toast.LENGTH_SHORT).show();
             }
+
         });
     }
+
 
 }
