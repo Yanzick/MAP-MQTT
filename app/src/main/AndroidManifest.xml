@@ -16,6 +16,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication"
         tools:targetApi="31">
+        <meta-data
+            android:name="com.google.android.gms.location.history.ATTRIBUTION_TAG"
+            android:value="location_history" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

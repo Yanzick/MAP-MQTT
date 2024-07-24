@@ -1,5 +1,7 @@
 package com.example.myapplication;
 
+import static com.mapbox.api.directions.v5.DirectionsCriteria.PROFILE_DRIVING_TRAFFIC;
+import static com.mapbox.core.constants.Constants.PRECISION_6;
 import static com.mapbox.maps.plugin.animation.CameraAnimationsUtils.getCamera;
 import static com.mapbox.maps.plugin.gestures.GesturesUtils.addOnMapClickListener;
 import static com.mapbox.maps.plugin.gestures.GesturesUtils.getGestures;
@@ -10,11 +12,15 @@ import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.location.Location;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultCallback;
@@ -37,15 +43,25 @@ import com.mapbox.api.directions.v5.models.DirectionsRoute;
 import com.mapbox.api.directions.v5.models.RouteOptions;
 import com.mapbox.api.directions.v5.models.VoiceInstructions;
 import com.mapbox.bindgen.Expected;
+import com.mapbox.geojson.Feature;
+import com.mapbox.geojson.FeatureCollection;
+import com.mapbox.geojson.LineString;
 import com.mapbox.geojson.Point;
+
 import com.mapbox.maps.CameraOptions;
 import com.mapbox.maps.EdgeInsets;
 import com.mapbox.maps.MapView;
+import com.mapbox.maps.MapboxMap;
 import com.mapbox.maps.Style;
+import com.mapbox.maps.extension.style.layers.generated.LineLayer;
 import com.mapbox.maps.extension.style.layers.properties.generated.TextAnchor;
+import com.mapbox.maps.extension.style.sources.Source;
+import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource;
 import com.mapbox.maps.plugin.animation.MapAnimationOptions;
+import com.mapbox.maps.plugin.annotation.AnnotationManager;
 import com.mapbox.maps.plugin.annotation.AnnotationPlugin;
 import com.mapbox.maps.plugin.annotation.AnnotationPluginImplKt;
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotation;
 import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManager;
 import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManagerKt;
 import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions;
@@ -71,6 +87,7 @@ import com.mapbox.navigation.ui.maps.location.NavigationLocationProvider;
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi;
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView;
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineOptions;
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineClearValue;
 import com.mapbox.navigation.ui.maps.route.line.model.RouteLineError;
 import com.mapbox.navigation.ui.maps.route.line.model.RouteLineResources;
 import com.mapbox.navigation.ui.maps.route.line.model.RouteSetValue;
@@ -82,10 +99,16 @@ import com.mapbox.navigation.ui.voice.model.SpeechValue;
 import com.mapbox.navigation.ui.voice.model.SpeechVolume;
 import com.mapbox.navigation.ui.voice.view.MapboxSoundButton;
 import com.mapbox.turf.TurfMeasurement;
+import com.mapbox.maps.GeoJSONSourceData;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Scanner;
+
 import kotlin.Unit;
 import kotlin.jvm.functions.Function1;
 
@@ -95,6 +118,9 @@ import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 
 public class MainActivity extends AppCompatActivity {
+    Point nearestStop = null;
+    private PointAnnotationManager pointAnnotationManager;
+    private RoteManager routerManager;
     private MapView mapView;
     private MaterialButton setRoute;
     private FloatingActionButton focusLocationBtn;
@@ -103,19 +129,18 @@ public class MainActivity extends AppCompatActivity {
     private MapboxRouteLineApi routeLineApi;
     private DatabaseReference databaseReference;
     private Double latA, longB;
+    private Spinner spinner;
+    private String selectedId = "";
     private TextView distanceTextView;
     private TextView timeTextView;
+    private GeoJsonSource geoJsonSource;
     private static final double K = 1.0; // Hệ số tỉ lệ
+    private MapboxMap mapboxMap;
 
     // Tính khoảng cách giữa hai điểm
-    public static double calculateLi(double x1, double y1, double x2, double y2) {
-        return K * Math.sqrt(Math.pow((x2 - x1), 2) + Math.pow((y2 - y1), 2));
-    }
 
-    // Tính khoảng cách từ một điểm đến một đường thẳng
-    public static double calculateDi(double x0, double y0, double a, double b, double c) {
-        return K * (Math.abs(a * x0 + b * y0 + c) / Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2)));
-    }
+    private final String GEOJSON_SOURCE_ID = "line-source";
+    private final String LINE_LAYER_ID = "line-layer";
 
     private final LocationObserver locationObserver = new LocationObserver() {
         @Override
@@ -230,6 +255,7 @@ public class MainActivity extends AppCompatActivity {
         mapView = findViewById(R.id.mapView);
         focusLocationBtn = findViewById(R.id.focusLocation);
         setRoute = findViewById(R.id.setRoute);
+        routerManager = new RoteManager(this, mapboxNavigation, new NavigationLocationProvider(), routeLineApi, routeLineView);
 
         MapboxRouteLineOptions options = new MapboxRouteLineOptions.Builder(this)
                 .withRouteLineResources(new RouteLineResources.Builder().build())
@@ -239,21 +265,18 @@ public class MainActivity extends AppCompatActivity {
 
         speechApi = new MapboxSpeechApi(MainActivity.this, getString(R.string.mapbox_access_token), Locale.US.toLanguageTag());
         mapboxVoiceInstructionsPlayer = new MapboxVoiceInstructionsPlayer(MainActivity.this, Locale.US.toLanguageTag());
-
+        spinner = findViewById(R.id.spinner);
         NavigationOptions navigationOptions = new NavigationOptions.Builder(this).accessToken(getString(R.string.mapbox_access_token)).build();
 
         MapboxNavigationApp.setup(navigationOptions);
         mapboxNavigation = new MapboxNavigation(navigationOptions);
-
+        fetchDataFromFirebase();
         mapboxNavigation.registerRoutesObserver(routesObserver);
         mapboxNavigation.registerLocationObserver(locationObserver);
         mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver);
-        databaseReference = FirebaseDatabase.getInstance().getReference().child("Data");
         distanceTextView = findViewById(R.id.distanceTextView);
         timeTextView = findViewById(R.id.timeTextView);
-
         // Đọc dữ liệu từ Realtime Database và gán vào biến A và B
-        readLocationFromFirebase();
         MapboxSoundButton soundButton = findViewById(R.id.soundButton);
         soundButton.unmute();
         soundButton.setOnClickListener(new View.OnClickListener() {
@@ -295,7 +318,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        mapView.getMapboxMap().loadStyleUri(Style.MAPBOX_STREETS, new Style.OnStyleLoaded() {
+        mapView.getMapboxMap().loadStyleUri(Style.OUTDOORS, new Style.OnStyleLoaded() {
             @Override
             public void onStyleLoaded(@NonNull Style style) {
                 mapView.getMapboxMap().setCamera(new CameraOptions.Builder().zoom(20.0).build());
@@ -312,7 +335,7 @@ public class MainActivity extends AppCompatActivity {
                 });
                 Bitmap bitmap = BitmapFactory.decodeResource(getResources(), R.drawable.location_pin);
                 AnnotationPlugin annotationPlugin = AnnotationPluginImplKt.getAnnotations(mapView);
-                PointAnnotationManager pointAnnotationManager = PointAnnotationManagerKt.createPointAnnotationManager(annotationPlugin, mapView);
+                pointAnnotationManager = PointAnnotationManagerKt.createPointAnnotationManager(annotationPlugin, mapView);
                 addOnMapClickListener(mapView.getMapboxMap(), new OnMapClickListener() {
                     @Override
                     public boolean onMapClick(@NonNull Point point) {
@@ -334,85 +357,230 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-
-
     @SuppressLint("MissingPermission")
     private void fetchRoute() {
-        // Tọa độ của điểm đích từ Firebase
+        // Xóa điểm đánh dấu và tuyến đường cũ
+        if (pointAnnotationManager != null) {
+            pointAnnotationManager.deleteAll();
+        }
+        Bitmap invisibleIconBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+        // Lấy tọa độ điểm đích từ Firebase
         Point destination = Point.fromLngLat(longB, latA);
+        Bitmap originalIconBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.bus);
+        Bitmap startIconBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.gps);
 
+        // Thay đổi kích thước của biểu tượng
+        int newWidth = 180;
+        int newHeight = 150;
+        Bitmap resizedIconBitmap = Bitmap.createScaledBitmap(originalIconBitmap, newWidth, newHeight, false);
+        Bitmap resizedStartIconBitmap = Bitmap.createScaledBitmap(startIconBitmap, newWidth, newHeight, false);
+
+        AnnotationPlugin annotationPlugin = AnnotationPluginImplKt.getAnnotations(mapView);
+        pointAnnotationManager = PointAnnotationManagerKt.createPointAnnotationManager(annotationPlugin, mapView);
         LocationEngine locationEngine = LocationEngineProvider.getBestLocationEngine(MainActivity.this);
         locationEngine.getLastLocation(new LocationEngineCallback<LocationEngineResult>() {
             @Override
             public void onSuccess(LocationEngineResult result) {
                 Location location = result.getLastLocation();
-                setRoute.setEnabled(false);
-                setRoute.setText("Đang tìm tuyến xe gần nhất...");
-                RouteOptions.Builder builder = RouteOptions.builder();
-                Point origin = Point.fromLngLat(Objects.requireNonNull(location).getLongitude(), location.getLatitude());
-
-                // Tính khoảng cách giữa origin và destination
-                double distance = calculateLi(
-                        origin.latitude(),
-                        origin.longitude(),
-                        destination.latitude(),
-                        destination.longitude()
-                );
-
-                // Kiểm tra nếu khoảng cách vượt quá giới hạn (ví dụ: 5000 km)
-                double maxDistance = 10.0; // Bạn có thể điều chỉnh giới hạn này nếu cần
-                if (distance > maxDistance) {
-                    Toast.makeText(MainActivity.this, "Không có tuyến xe buýt nào ở gần bạn", Toast.LENGTH_SHORT).show();
-                    setRoute.setEnabled(true);
-                    setRoute.setText("Tìm tuyến xe gần nhất");
+                if (location == null) {
+                    Toast.makeText(MainActivity.this, "Không thể lấy vị trí hiện tại", Toast.LENGTH_SHORT).show();
                     return;
                 }
 
-                builder.coordinatesList(Arrays.asList(origin, destination));
-                builder.alternatives(true);
-                builder.profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC);
-                builder.bearingsList(Arrays.asList(Bearing.builder().angle(location.getBearing()).degrees(45.0).build(), null));
-                applyDefaultNavigationOptions(builder);
+                setRoute.setEnabled(false);
+                setRoute.setText("Đang tìm tuyến xe gần nhất...");
 
-                mapboxNavigation.requestRoutes(builder.build(), new NavigationRouterCallback() {
+                Point origin = Point.fromLngLat(location.getLongitude(), location.getLatitude());
+
+                routerManager.getBusStops(selectedId, new RoteManager.OnBusStopsFetchedListener() {
                     @Override
-                    public void onRoutesReady(@NonNull List<NavigationRoute> list, @NonNull RouterOrigin routerOrigin) {
-                        mapboxNavigation.setNavigationRoutes(list);
+                    public void onBusStopsFetched(List<Point> busStops) {
+                        if (busStops.isEmpty()) {
+                            Toast.makeText(MainActivity.this, "Không có điểm dừng nào trong RouteManager", Toast.LENGTH_SHORT).show();
+                            setRoute.setEnabled(true);
+                            setRoute.setText("Tìm tuyến xe gần nhất");
+                            return;
+                        }
 
-                        // Lấy đối tượng DirectionsRoute từ NavigationRoute
-                        DirectionsRoute route = list.get(0).getDirectionsRoute();
+                        // Sử dụng getDistanceToPath để tính khoảng cách từ điểm đến đường gấp khúc
+                        List<Point> filteredStops = new ArrayList<>();
+                        double distanceToDestination = getDistance(origin, destination);
 
-                        // Lấy khoảng cách và thời gian từ DirectionsRoute
-                        double distanceInKm = route.distance() / 1000.0;
-                        double durationInMinutes = route.duration() / 60.0;
+                        for (Point stop : busStops) {
+                            double distanceFromStopToDestination = getDistance(stop, destination);
+                            // Tính khoảng cách từ điểm hiện tại đến điểm dừng
+                            double distanceToStop = getDistance(origin, stop);
 
-                        // Cập nhật TextView với khoảng cách và thời gian
-                        distanceTextView.setText(String.format(Locale.US, "Khoản cách: %.2f km", distanceInKm));
-                        timeTextView.setText(String.format(Locale.US, "Thời gian: %.2f min", durationInMinutes));
+                            if (distanceToStop < distanceToDestination &&
+                                    distanceFromStopToDestination < distanceToDestination) {
+                                filteredStops.add(stop);
+                            }
+                        }
 
-                        focusLocationBtn.performClick();
-                        setRoute.setEnabled(true);
-                        setRoute.setText("Tìm tuyến xe gần nhất");
-                    }
+                        List<Point> sortedStops = sortStopsByProximityToDestination(filteredStops, origin, destination);
+                        List<Point> coordinates = new ArrayList<>();
+                        coordinates.add(origin);
+                        coordinates.addAll(sortedStops);
+                        coordinates.add(destination);
 
-                    @Override
-                    public void onFailure(@NonNull List<RouterFailure> list, @NonNull RouteOptions routeOptions) {
-                        setRoute.setEnabled(true);
-                        setRoute.setText("Tìm tuyến xe gần nhất");
-                        Toast.makeText(MainActivity.this, "Tìm tuyến xe thất bại", Toast.LENGTH_SHORT).show();
-                    }
+                        RouteOptions.Builder builder = RouteOptions.builder()
+                                .coordinatesList(coordinates)
+                                .alternatives(true)
+                                .profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC);
 
-                    @Override
-                    public void onCanceled(@NonNull RouteOptions routeOptions, @NonNull RouterOrigin routerOrigin) {
+                        applyDefaultNavigationOptions(builder);
+
+                        mapboxNavigation.requestRoutes(builder.build(), new NavigationRouterCallback() {
+                            @Override
+                            public void onRoutesReady(@NonNull List<NavigationRoute> list, @NonNull RouterOrigin routerOrigin) {
+                                mapboxNavigation.setNavigationRoutes(list);
+                                DirectionsRoute route = list.get(0).getDirectionsRoute();
+
+                                double distanceInKm = route.distance() / 1000.0;
+                                double durationInMinutes = route.duration() / 60.0;
+
+                                runOnUiThread(() -> {
+                                    distanceTextView.setText(String.format(Locale.US, "Khoảng cách: %.2f km", distanceInKm));
+                                    timeTextView.setText(String.format(Locale.US, "Thời gian: %.2f min", durationInMinutes));
+                                    setRoute.setEnabled(true);
+                                    setRoute.setText("Tìm tuyến xe gần nhất");
+                                });
+
+                                PointAnnotationOptions pointAnnotationOptions = new PointAnnotationOptions()
+                                        .withPoint(destination)
+                                        .withIconImage(resizedIconBitmap);
+                                pointAnnotationManager.create(pointAnnotationOptions);
+                                PointAnnotationOptions pointAnnotationOptions1 = new PointAnnotationOptions()
+                                        .withPoint(origin)
+                                        .withIconImage(resizedStartIconBitmap);
+                                pointAnnotationManager.create(pointAnnotationOptions1);
+                                for (Point stop : busStops) {
+                                    PointAnnotationOptions pointAnnotationOptions3 = new PointAnnotationOptions()
+                                            .withPoint(stop)
+                                            .withIconImage(invisibleIconBitmap);
+                                    pointAnnotationOptions3.withIconSize(0.1f);
+                                    pointAnnotationManager.create(pointAnnotationOptions3);
+                                }
+                            }
+
+                            @Override
+                            public void onFailure(@NonNull List<RouterFailure> list, @NonNull RouteOptions routeOptions) {
+                                Log.e("RouteFetchFailure", "Lỗi: " + list);
+                                for (RouterFailure failure : list) {
+                                    Log.e("RouteFetchFailure", "Lỗi: " + failure.getMessage());
+                                    Log.e("RouteFetchFailure", "Chi tiết: " + failure.getClass());
+                                }
+                                runOnUiThread(() -> {
+                                    setRoute.setEnabled(true);
+                                    setRoute.setText("Tìm tuyến xe gần nhất");
+                                    Toast.makeText(MainActivity.this, "Tìm tuyến xe thất bại", Toast.LENGTH_SHORT).show();
+                                });
+                            }
+
+                            @Override
+                            public void onCanceled(@NonNull RouteOptions routeOptions, @NonNull RouterOrigin routerOrigin) {
+                                // Xử lý khi yêu cầu bị hủy
+                            }
+                        });
                     }
                 });
             }
 
             @Override
             public void onFailure(@NonNull Exception exception) {
+                Toast.makeText(MainActivity.this, "Lỗi khi lấy vị trí hiện tại", Toast.LENGTH_SHORT).show();
             }
         });
     }
+    private double getDistance(Point point1, Point point2) {
+        double lat1 = point1.latitude();
+        double lon1 = point1.longitude();
+        double lat2 = point2.latitude();
+        double lon2 = point2.longitude();
+
+        // Chuyển đổi từ độ sang radian
+        double lat1Rad = Math.toRadians(lat1);
+        double lon1Rad = Math.toRadians(lon1);
+        double lat2Rad = Math.toRadians(lat2);
+        double lon2Rad = Math.toRadians(lon2);
+
+        // Công thức Haversine để tính khoảng cách
+        double dLat = lat2Rad - lat1Rad;
+        double dLon = lon2Rad - lon1Rad;
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        double earthRadius = 6371; // bán kính trái đất theo km
+
+        return earthRadius * c; // Khoảng cách tính bằng km
+    }
+
+    private double getDistanceToPath(Point point, List<Point> path) {
+        double totalDistance = 0.0;
+
+        // Nếu đường nhiều khúc có ít hơn 2 đoạn, không tính được khoảng cách
+        if (path.size() < 2) {
+            return totalDistance;
+        }
+
+        // Lặp qua từng đoạn đường trong đường nhiều khúc
+        for (int i = 0; i < path.size() - 1; i++) {
+            Point start = path.get(i);
+            Point end = path.get(i + 1);
+
+            // Chuyển đổi điểm và tọa độ thành dạng x, y
+            double x0 = point.longitude();
+            double y0 = point.latitude();
+            double x1 = start.longitude();
+            double y1 = start.latitude();
+            double x2 = end.longitude();
+            double y2 = end.latitude();
+
+            // Tính hệ số a, b, c của đường thẳng
+            double a = y2 - y1;
+            double b = x1 - x2;
+            double c = x2 * y1 - x1 * y2;
+
+            // Tính khoảng cách từ điểm đến đoạn đường thẳng giữa start và end
+            double distanceToLine = calculateDi(x0, y0, a, b, c);
+
+            // Tính khoảng cách giữa điểm và điểm đầu, điểm kết thúc của đoạn đường
+            double distanceToStart = calculateLi(x0, y0, x1, y1);
+            double distanceToEnd = calculateLi(x0, y0, x2, y2);
+
+            // Tính khoảng cách giữa điểm và đoạn đường thẳng (điểm gần nhất sẽ là điểm trong đoạn đường thẳng)
+            // Nếu khoảng cách đến đoạn đường thẳng nhỏ hơn khoảng cách đến các điểm đầu và kết thúc
+            if (distanceToLine < distanceToStart && distanceToLine < distanceToEnd) {
+                totalDistance += distanceToLine;
+            } else {
+                // Nếu không, lấy khoảng cách từ điểm đến đoạn đường thẳng
+                totalDistance += Math.min(distanceToStart, distanceToEnd);
+            }
+        }
+
+        return totalDistance;
+    }
+
+    public static double calculateDi(double x0, double y0, double a, double b, double c) {
+        return K * (Math.abs(a * x0 + b * y0 + c) / Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2)));
+    }
+
+    public static double calculateLi(double x1, double y1, double x2, double y2) {
+        return K * Math.sqrt(Math.pow((x2 - x1), 2) + Math.pow((y2 - y1), 2));
+    }
+
+    private List<Point> sortStopsByProximityToDestination(List<Point> stops, Point origin, Point destination) {
+        // Sắp xếp các điểm dừng theo khoảng cách từ điểm xuất phát đến điểm đích
+        Collections.sort(stops, (p1, p2) -> {
+            double distanceToP1 = getDistance(origin, p1);
+            double distanceToP2 = getDistance(origin, p2);
+            return Double.compare(distanceToP1, distanceToP2);
+        });
+        return stops;
+    }
+
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -447,6 +615,14 @@ public class MainActivity extends AppCompatActivity {
 
                             // Cập nhật đường đi mới
                             fetchRoute();
+                            if (focusLocation) {
+                                mapView.getMapboxMap().setCamera(new CameraOptions.Builder()
+                                        .center(Point.fromLngLat(lon, lat))
+                                        .zoom(15.0) // Hoặc bất kỳ giá trị zoom nào bạn muốn
+                                        .build());
+                                focusLocation = false; // Đặt lại giá trị để không cập nhật camera nữa
+                            }
+
                         } catch (NumberFormatException e) {
                             Log.e("Location", "Lỗi chuyển đổi latitude hoặc longitude: " + e.getMessage());
                         }
@@ -469,6 +645,70 @@ public class MainActivity extends AppCompatActivity {
 
         });
     }
+    private void fetchDataFromFirebase() {
+        databaseReference = FirebaseDatabase.getInstance().getReference(); // Tham chiếu đến gốc của Firebase Realtime Database
 
+        databaseReference.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                List<String> spinnerData = new ArrayList<>();
+
+                for (DataSnapshot snapshot : dataSnapshot.getChildren()) {
+                    String nodeName = snapshot.getKey(); // Lấy tên của mỗi node gốc
+
+                    // Kiểm tra xem nodeName có phải là số không
+                    if (isNumeric(nodeName)) {
+                        spinnerData.add(nodeName);
+                    }
+                }
+
+                if (spinnerData.isEmpty()) {
+                    // Xử lý khi không có dữ liệu
+                    spinnerData.add("No data available");
+                }
+
+                setupSpinner(spinnerData);
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+                Toast.makeText(MainActivity.this, "Failed to load data.", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // Phương thức kiểm tra xem một chuỗi có phải là số không
+    private boolean isNumeric(String str) {
+        try {
+            Integer.parseInt(str);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private void setupSpinner(List<String> spinnerData) {
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, spinnerData);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                selectedId = spinnerData.get(position); // Lấy tên của node gốc được chọn từ Spinner
+                databaseReference = FirebaseDatabase.getInstance().getReference().child(selectedId);
+                readLocationFromFirebase();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // Xử lý khi không có phần tử nào được chọn
+                selectedId = "53";
+                Log.d("SelectedNode", "Selected node: " + selectedId); // Log để kiểm tra giá trị
+            }
+        });
+    }
 
 }
+
+

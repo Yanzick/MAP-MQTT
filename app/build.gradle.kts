@@ -45,5 +45,7 @@ dependencies {
     //implementation("com.mapbox.maps:android:11.4.1")
     implementation ("com.mapbox.navigation:android:2.15.2")
 
+    //implementation ("com.mapbox.mapboxsdk:mapbox-android-sdk:9.6.2")
+
 
 }
