@@ -401,14 +401,18 @@ public class MainActivity extends AppCompatActivity {
                             setRoute.setText("Tìm tuyến xe gần nhất");
                             return;
                         }
-
-                        // Sử dụng getDistanceToPath để tính khoảng cách từ điểm đến đường gấp khúc
                         List<Point> filteredStops = new ArrayList<>();
                         double distanceToDestination = getDistance(origin, destination);
-
+                        List<Point> coordinates1 = new ArrayList<>();
+                        coordinates1.add(origin);
+                        coordinates1.addAll(filteredStops);
+                        coordinates1.add(destination);
+                        double distanceToPath = getDistanceToPath(origin,coordinates1);
+                        runOnUiThread(() -> {
+                            distanceTextView.setText(String.format(Locale.US, "Khoảng cách: %.2f km", distanceToPath));
+                        });
                         for (Point stop : busStops) {
                             double distanceFromStopToDestination = getDistance(stop, destination);
-                            // Tính khoảng cách từ điểm hiện tại đến điểm dừng
                             double distanceToStop = getDistance(origin, stop);
 
                             if (distanceToStop < distanceToDestination &&
@@ -416,20 +420,17 @@ public class MainActivity extends AppCompatActivity {
                                 filteredStops.add(stop);
                             }
                         }
-
                         List<Point> sortedStops = sortStopsByProximityToDestination(filteredStops, origin, destination);
                         List<Point> coordinates = new ArrayList<>();
                         coordinates.add(origin);
                         coordinates.addAll(sortedStops);
                         coordinates.add(destination);
-
                         RouteOptions.Builder builder = RouteOptions.builder()
                                 .coordinatesList(coordinates)
                                 .alternatives(true)
                                 .profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC);
 
                         applyDefaultNavigationOptions(builder);
-
                         mapboxNavigation.requestRoutes(builder.build(), new NavigationRouterCallback() {
                             @Override
                             public void onRoutesReady(@NonNull List<NavigationRoute> list, @NonNull RouterOrigin routerOrigin) {
@@ -493,43 +494,23 @@ public class MainActivity extends AppCompatActivity {
         });
     }
     private double getDistance(Point point1, Point point2) {
-        double lat1 = point1.latitude();
-        double lon1 = point1.longitude();
-        double lat2 = point2.latitude();
-        double lon2 = point2.longitude();
+        double x1 = point1.longitude(); // Kinh độ của điểm 1
+        double y1 = point1.latitude();  // Vĩ độ của điểm 1
+        double x2 = point2.longitude(); // Kinh độ của điểm 2
+        double y2 = point2.latitude();  // Vĩ độ của điểm 2
 
-        // Chuyển đổi từ độ sang radian
-        double lat1Rad = Math.toRadians(lat1);
-        double lon1Rad = Math.toRadians(lon1);
-        double lat2Rad = Math.toRadians(lat2);
-        double lon2Rad = Math.toRadians(lon2);
-
-        // Công thức Haversine để tính khoảng cách
-        double dLat = lat2Rad - lat1Rad;
-        double dLon = lon2Rad - lon1Rad;
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        double earthRadius = 6371; // bán kính trái đất theo km
-
-        return earthRadius * c; // Khoảng cách tính bằng km
+        // Tính toán khoảng cách Euclidean giữa hai điểm
+        return Math.sqrt(Math.pow((x2 - x1), 2) + Math.pow((y2 - y1), 2));
     }
 
+
     private double getDistanceToPath(Point point, List<Point> path) {
-        double totalDistance = 0.0;
+        double minDistance = Double.MAX_VALUE;
 
-        // Nếu đường nhiều khúc có ít hơn 2 đoạn, không tính được khoảng cách
-        if (path.size() < 2) {
-            return totalDistance;
-        }
-
-        // Lặp qua từng đoạn đường trong đường nhiều khúc
         for (int i = 0; i < path.size() - 1; i++) {
             Point start = path.get(i);
             Point end = path.get(i + 1);
 
-            // Chuyển đổi điểm và tọa độ thành dạng x, y
             double x0 = point.longitude();
             double y0 = point.latitude();
             double x1 = start.longitude();
@@ -542,25 +523,24 @@ public class MainActivity extends AppCompatActivity {
             double b = x1 - x2;
             double c = x2 * y1 - x1 * y2;
 
-            // Tính khoảng cách từ điểm đến đoạn đường thẳng giữa start và end
+            // Tính khoảng cách từ điểm đến đoạn đường thẳng
             double distanceToLine = calculateDi(x0, y0, a, b, c);
 
             // Tính khoảng cách giữa điểm và điểm đầu, điểm kết thúc của đoạn đường
             double distanceToStart = calculateLi(x0, y0, x1, y1);
             double distanceToEnd = calculateLi(x0, y0, x2, y2);
 
-            // Tính khoảng cách giữa điểm và đoạn đường thẳng (điểm gần nhất sẽ là điểm trong đoạn đường thẳng)
-            // Nếu khoảng cách đến đoạn đường thẳng nhỏ hơn khoảng cách đến các điểm đầu và kết thúc
+            // Kiểm tra xem khoảng cách đến đường thẳng có nhỏ hơn khoảng cách đến điểm đầu và điểm kết thúc không
             if (distanceToLine < distanceToStart && distanceToLine < distanceToEnd) {
-                totalDistance += distanceToLine;
+                minDistance = Math.min(minDistance, distanceToLine);
             } else {
-                // Nếu không, lấy khoảng cách từ điểm đến đoạn đường thẳng
-                totalDistance += Math.min(distanceToStart, distanceToEnd);
+                minDistance = Math.min(minDistance, Math.min(distanceToStart, distanceToEnd));
             }
         }
 
-        return totalDistance;
+        return minDistance;
     }
+
 
     public static double calculateDi(double x0, double y0, double a, double b, double c) {
         return K * (Math.abs(a * x0 + b * y0 + c) / Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2)));
